@@ -1,0 +1,576 @@
+---
+title: "Main results analysis"
+output: html_document
+---
+
+```{r, setup, include=FALSE}
+knitr::opts_chunk$set(
+  warning = FALSE,
+  message = FALSE, 
+  echo = FALSE
+)
+```
+
+```{r}
+# Load packages
+library(tidyverse)
+library(rms)
+library(naniar)
+library(rpart)
+library(rpart.plot)
+library(corrplot)
+library(kableExtra)
+library(gtsummary)
+
+# Load results
+load(here::here("analysis", "thesis_res_no_imp.rda"))
+load(here::here("analysis", "thesis_res_mice.rda"))
+load(here::here("analysis", "thesis_res_bb.rda"))
+load(here::here("analysis", "thesis_res_aregimp.rda"))
+```
+
+```{r}
+# Load the data and prepare them ---------------------------------------
+df <- read_rds(here::here("data", "synthetic_data.rds"))
+```
+
+<br>
+
+<br>
+
+# Tables
+```{r}
+# Function for computing Standardized Mean Differences -----------------
+add_smd <- function(data, variable, by, ...) {
+  
+    covs <- variable
+    bal_frm <- paste(
+    by,
+    paste0(covs, collapse = " + "),
+    sep = " ~ "
+  ) %>% 
+    as.formula()
+    
+    bal_tab_1 <- bal.tab(
+    bal_frm,
+    data = data,
+    continuous = "std",
+    binary = "std",
+    s.d.denom = "pooled"
+  )
+  
+  bal_tab_1$Balance %>% 
+    as_tibble(rownames = "variable") %>%
+    filter(str_detect(variable, "<NA>$", negate = TRUE)) %>% 
+    .[["Diff.Un"]] %>% 
+    round(2L)
+  
+}
+
+# Make the stratified table --------------------------------------------
+df %>% 
+  tbl_summary(
+    by = treat,
+    statistic = list(
+      all_continuous() ~ "{median} ({p25}, {p75})"
+    ),
+    digits = all_continuous() ~ 2,
+    missing_text = "Missing"
+  ) %>% 
+  add_n() %>% 
+  add_overall() %>% 
+  add_stat(fns = everything() ~ add_smd) %>% 
+  modify_header(list(add_stat_1 ~ "**SMD**")) %>% 
+  modify_caption(caption = "Table 1. Descriptive statistics of the sample.")
+```
+
+<br>
+
+<br>
+
+```{r}
+no_mi_balance <- bind_rows(
+  cc_res$balance, mind_res$balance, saem_res$balance, gbm_res$balance
+) %>% 
+  dplyr::select(-single_smd, -contains("post")) %>% 
+  group_by(approach, ps_method, ps_est) %>% 
+  mutate(
+    smd_pre_med = median(smd_pre),
+    smd_pre_min = min(smd_pre),
+    smd_pre_max = max(smd_pre),
+    ovl_pre_med = median(ovl_pre),
+    ovl_pre_min = min(ovl_pre),
+    ovl_pre_max = max(ovl_pre),
+    c_stat_pre_med = median(c_stat_pre),
+    c_stat_pre_min = min(c_stat_pre),
+    c_stat_pre_max = max(c_stat_pre)
+  )
+
+mi_balance <- bind_rows(
+  purrr::map_dfr(.x = mice_res$design_stage, ~ .x$balance) %>% 
+    add_column(approach = "mice", .after = 1),
+  purrr::map_dfr(.x = bb_res$design_stage, ~ .x$balance) %>% 
+    add_column(approach = "bb", .after = 1),
+  purrr::map_dfr(.x = aregimp_res$design_stage, ~ .x$balance) %>% 
+    add_column(approach = "areg_imp", .after = 1)
+) %>% 
+  dplyr::select(-single_smd, -contains("post")) %>% 
+  group_by(approach, ps_method, ps_est) %>% 
+  dplyr::summarize(
+    smd_pre_med = median(smd_pre),
+    smd_pre_min = min(smd_pre),
+    smd_pre_max = max(smd_pre),
+    ovl_pre_med = median(ovl_pre),
+    ovl_pre_min = min(ovl_pre),
+    ovl_pre_max = max(ovl_pre),
+    c_stat_pre_med = median(c_stat_pre),
+    c_stat_pre_min = min(c_stat_pre),
+    c_stat_pre_max = max(c_stat_pre)
+  ) %>% 
+  ungroup()
+
+# Put the balance information together ---------------------------------
+balance <- bind_rows(no_mi_balance, mi_balance) %>% 
+  # Use C-stat - 0.5 to make comparison with other measures possible
+  mutate_at(vars(contains("c_stat")), ~ . - 0.5) %>% 
+  mutate_at(vars(smd_pre:c_stat_pre_max), ~ round(., 2L)) %>% 
+  mutate(
+    SMD = glue::glue("{smd_pre_med} ({smd_pre_min};{smd_pre_max})"),
+    OVL = glue::glue("{ovl_pre_med} ({ovl_pre_min};{ovl_pre_max})"),
+    `C-stat` = glue::glue(
+      "{c_stat_pre_med} ({c_stat_pre_min};{c_stat_pre_max})"
+    )
+  ) %>% 
+  dplyr::select(
+    approach, ps_method, ps_est, SMD, OVL, `C-stat`
+  ) %>% 
+  pivot_longer(c(SMD:`C-stat`), values_to = "value", names_to = "bal") %>% 
+  mutate(
+    approach = case_when(
+      approach == "cc" ~ "CC",
+      approach == "mind" ~ "MInd",
+      approach == "saem" ~ "PS-SAEM",
+      approach == "gbm" ~ "PS-GBM",
+      approach == "mice" ~ "MI-MICE",
+      approach == "bb" ~ "MI-BB",
+      approach == "areg_imp" ~ "MI-AREGIMP"
+    ),
+    ps_method = case_when(
+      ps_method == "match_nn" ~ "NN",
+      ps_method == "full_match" ~ "FM",
+      ps_method == "ps_iptw" ~ "PS-IPTW"
+    ),
+    ps_est = case_when(
+      ps_est == "cbps" ~ "CBPS",
+      ps_est == "gbm" ~ "GBM",
+      ps_est == "logit" ~ "LR",
+      ps_est == "saem" ~ "SAEM"
+    )
+  ) %>% 
+  unite("meas_ps", c(bal, ps_method), sep = " - ") %>% 
+  pivot_wider(names_from = meas_ps, values_from = value)
+
+kbl(
+  balance,
+  caption = "Table 2. Common support."
+) %>% 
+  kable_classic()
+```
+
+<br>
+
+<br>
+
+```{r}
+no_mi_balance <- bind_rows(
+  cc_res$balance, mind_res$balance, saem_res$balance, gbm_res$balance
+) %>% 
+  dplyr::select(-single_smd, -contains("pre")) %>% 
+  group_by(approach, ps_method, ps_est) %>% 
+  mutate(
+    smd_post_med = median(smd_post),
+    smd_post_min = min(smd_post),
+    smd_post_max = max(smd_post),
+    ovl_post_med = median(ovl_post),
+    ovl_post_min = min(ovl_post),
+    ovl_post_max = max(ovl_post),
+    c_stat_post_med = median(c_stat_post),
+    c_stat_post_min = min(c_stat_post),
+    c_stat_post_max = max(c_stat_post),
+    prop_retained_med = median(prop_retained),
+    prop_retained_min = min(prop_retained),
+    prop_retained_max = max(prop_retained)
+  )
+
+mi_balance <- bind_rows(
+  purrr::map_dfr(.x = mice_res$design_stage, ~ .x$balance) %>% 
+    add_column(approach = "mice", .after = 1),
+  purrr::map_dfr(.x = bb_res$design_stage, ~ .x$balance) %>% 
+    add_column(approach = "bb", .after = 1),
+  purrr::map_dfr(.x = aregimp_res$design_stage, ~ .x$balance) %>% 
+    add_column(approach = "areg_imp", .after = 1)
+) %>% 
+  dplyr::select(-single_smd, -contains("pre")) %>% 
+  group_by(approach, ps_method, ps_est) %>% 
+  dplyr::summarize(
+    smd_post_med = median(smd_post),
+    smd_post_min = min(smd_post),
+    smd_post_max = max(smd_post),
+    ovl_post_med = median(ovl_post),
+    ovl_post_min = min(ovl_post),
+    ovl_post_max = max(ovl_post),
+    c_stat_post_med = median(c_stat_post),
+    c_stat_post_min = min(c_stat_post),
+    c_stat_post_max = max(c_stat_post),
+    prop_retained_med = median(prop_retained),
+    prop_retained_min = min(prop_retained),
+    prop_retained_max = max(prop_retained)
+  ) %>% 
+  ungroup()
+
+# Put the balance information together ---------------------------------
+balance <- bind_rows(no_mi_balance, mi_balance) %>% 
+  # Use C-stat - 0.5 to make comparison with other measures possible
+  mutate_at(vars(contains("c_stat")), ~ . - 0.5) %>% 
+  mutate_at(vars(smd_post:prop_retained_max), ~ round(., 2L)) %>% 
+  mutate(
+    SMD = glue::glue("{smd_post_med} ({smd_post_min};{smd_post_max})"),
+    OVL = glue::glue("{ovl_post_med} ({ovl_post_min};{ovl_post_max})"),
+    `C-stat` = glue::glue(
+      "{c_stat_post_med} ({c_stat_post_min};{c_stat_post_max})"
+    ),
+    PIS = glue::glue(
+      "{prop_retained_med} ({prop_retained_min};{prop_retained_max})"
+    )
+  ) %>% 
+  dplyr::select(
+    approach, ps_method, ps_est, SMD, OVL, `C-stat`, PIS
+  ) %>% 
+  pivot_longer(c(SMD:PIS), values_to = "value", names_to = "bal") %>% 
+  mutate(
+    approach = case_when(
+      approach == "cc" ~ "CC",
+      approach == "mind" ~ "MInd",
+      approach == "saem" ~ "PS-SAEM",
+      approach == "gbm" ~ "PS-GBM",
+      approach == "mice" ~ "MI-MICE",
+      approach == "bb" ~ "MI-BB",
+      approach == "areg_imp" ~ "MI-AREGIMP"
+    ),
+    ps_method = case_when(
+      ps_method == "match_nn" ~ "NN",
+      ps_method == "full_match" ~ "FM",
+      ps_method == "ps_iptw" ~ "PS-IPTW"
+    ),
+    ps_est = case_when(
+      ps_est == "cbps" ~ "CBPS",
+      ps_est == "gbm" ~ "GBM",
+      ps_est == "logit" ~ "LR",
+      ps_est == "saem" ~ "SAEM"
+    )
+  ) %>% 
+  unite("meas_ps", c(ps_method, bal), sep = " - ") %>% 
+  pivot_wider(names_from = meas_ps, values_from = value)
+
+kbl(
+  balance,
+  caption = "Table 3. Overall balance after PS."
+) %>% 
+  kable_classic()
+```
+
+<br>
+
+<br>
+
+<br>
+
+<br>
+
+# Figures
+```{r, fig.width = 14, fig.height = 8, fig.cap = "Figure 1. Percentage of missingness in each baseline covariate."}
+vis_miss(
+  df %>% 
+    dplyr::select(-treat)
+)
+```
+
+<br>
+
+<br>
+
+```{r, fig.width = 8, fig.height = 10, fig.cap = "Figure 2. Missingness patterns described by a regression tree."}
+df %>%
+  dplyr::select(-treat) %>% 
+  add_prop_miss() %>%
+  rpart(prop_miss_all ~ ., data = ., model = TRUE) %>%
+  prp(type = 4, prefix = "Prop. Miss = ")
+```
+
+<br>
+
+<br>
+
+```{r}
+no_mi_balance <- bind_rows(
+  cc_res$balance, mind_res$balance, saem_res$balance, gbm_res$balance
+) %>% 
+  dplyr::select(-single_smd, -contains("pre")) %>% 
+  group_by(approach, ps_method, ps_est) %>% 
+  mutate(
+    smd_post_med = median(smd_post),
+    smd_post_min = min(smd_post),
+    smd_post_max = max(smd_post),
+    ovl_post_med = median(ovl_post),
+    ovl_post_min = min(ovl_post),
+    ovl_post_max = max(ovl_post),
+    c_stat_post_med = median(c_stat_post),
+    c_stat_post_min = min(c_stat_post),
+    c_stat_post_max = max(c_stat_post),
+    prop_retained_med = median(prop_retained),
+    prop_retained_min = min(prop_retained),
+    prop_retained_max = max(prop_retained)
+  )
+
+mi_balance <- bind_rows(
+  purrr::map_dfr(.x = mice_res$design_stage, ~ .x$balance) %>% 
+    add_column(approach = "mice", .after = 1),
+  purrr::map_dfr(.x = bb_res$design_stage, ~ .x$balance) %>% 
+    add_column(approach = "bb", .after = 1),
+  purrr::map_dfr(.x = aregimp_res$design_stage, ~ .x$balance) %>% 
+    add_column(approach = "areg_imp", .after = 1)
+) %>% 
+  dplyr::select(-single_smd, -contains("pre")) %>% 
+  group_by(approach, ps_method, ps_est) %>% 
+  dplyr::summarize(
+    smd_post_med = median(smd_post),
+    smd_post_min = min(smd_post),
+    smd_post_max = max(smd_post),
+    ovl_post_med = median(ovl_post),
+    ovl_post_min = min(ovl_post),
+    ovl_post_max = max(ovl_post),
+    c_stat_post_med = median(c_stat_post),
+    c_stat_post_min = min(c_stat_post),
+    c_stat_post_max = max(c_stat_post),
+    prop_retained_med = median(prop_retained),
+    prop_retained_min = min(prop_retained),
+    prop_retained_max = max(prop_retained)
+  ) %>% 
+  ungroup()
+
+# Put the balance information together ---------------------------------
+balance <- bind_rows(no_mi_balance, mi_balance) %>% 
+  # Use C-stat - 0.5 to make comparison with other measures possible
+  mutate_at(vars(contains("c_stat")), ~ . - 0.5) %>% 
+  mutate_at(vars(smd_post:c_stat_post_max), ~ round(., 2L)) %>%
+  dplyr::select(
+    approach, ps_method, ps_est, ends_with("med")
+  ) %>% 
+  pivot_longer(
+    c(smd_post_med:prop_retained_med), 
+    values_to = "value", 
+    names_to = "bal"
+  ) %>% 
+  # Get only SMD between PS
+  filter(bal == "smd_post_med") %>% 
+  dplyr::select(-bal) %>% 
+  mutate(
+    approach = case_when(
+      approach == "cc" ~ "CC",
+      approach == "mind" ~ "MInd",
+      approach == "saem" ~ "PS-EM",
+      approach == "gbm" ~ "PS-GBM",
+      approach == "mice" ~ "MICE",
+      approach == "bb" ~ "MI-BB",
+      approach == "areg_imp" ~ "MI-AREGIMP"
+    ),
+    ps_method = case_when(
+      ps_method == "match_nn" ~ "NN",
+      ps_method == "full_match" ~ "FM",
+      ps_method == "ps_iptw" ~ "PS-IPTW"
+    ),
+    ps_est = case_when(
+      ps_est == "cbps" ~ "CBPS",
+      ps_est == "gbm" ~ "GBM",
+      ps_est == "logit" ~ "LR",
+      ps_est == "saem" ~ "LR"
+    )
+  ) %>% 
+  mutate(
+    approach = factor(
+      approach,
+      levels = c(
+        "CC", "MInd", "PS-GBM", "PS-EM", "MI-BB", "MICE",
+        "MI-AREGIMP"
+      )),
+      ps_method = factor(
+        ps_method, levels = c("NN", "FM", "PS-IPTW")
+      )
+  )
+```
+
+<br>
+
+<br>
+
+```{r, fig.width = 12, fig.height = 8, fig.cap = "Figure 3. Standardized means differences of PS after the application of PS techniques. On the y-axis the methods used to deal with missing data. Colours represent the methods used to estimate PS. Boxes represent the PS technique that was used to balance the sample. For methods base on MI, only the median value is reported."}
+ggplot(
+  data = balance,
+  mapping = aes(x = value, y = approach, colour = ps_est)
+) +
+  geom_point(size = 3) +
+  facet_wrap(~ ps_method) +
+  scale_color_discrete(name = "PS model") +
+  xlab("Standardized mean difference of PS") +
+  ylab("") +
+  geom_vline(xintercept = 0.1, linetype = "dashed") +
+  theme_light()
+```
+
+<br>
+
+<br>
+
+```{r, fig.width = 12, fig.height = 10, fig.cap = "Figure 4. Correlation plots of the PS estimated with different missing data methods"}
+# MICE -----------------------------------------------------------------
+ps_mice <- tibble(
+  `MICE-LR` = map_dfr(
+    .x = mice_res$design_stage, 
+    ~ tibble(
+      id = 1:length(.x$ps$logit[["ps"]]), ps = .x$ps$logit[["ps"]]
+    )
+  ) %>% 
+    group_by(id) %>% 
+    summarise(ff = mean(ps)) %>% 
+    ungroup() %>% 
+    .[["ff"]],
+  `MICE-CBPS` = map_dfr(
+    .x = mice_res$design_stage, 
+    ~ tibble(
+      id = 1:length(.x$ps$cbps[["ps"]]), ps = .x$ps$cbps[["ps"]]
+    )
+  ) %>% 
+    group_by(id) %>% 
+    summarise(ff = mean(ps)) %>% 
+    ungroup() %>% 
+    .[["ff"]],
+  `MICE-GBM` = map_dfr(
+    .x = mice_res$design_stage, 
+    ~ tibble(
+      id = 1:length(.x$ps$gbm[["ps"]]), ps = .x$ps$gbm[["ps"]]
+    )
+  ) %>% 
+    group_by(id) %>% 
+    summarise(ff = mean(ps)) %>% 
+    ungroup() %>% 
+    .[["ff"]]
+)
+
+# BaBooN ---------------------------------------------------------------
+ps_bb <- tibble(
+  `BBPMM-LR` = map_dfr(
+    .x = bb_res$design_stage, 
+    ~ tibble(
+      id = 1:length(.x$ps$logit[["ps"]]), ps = .x$ps$logit[["ps"]]
+    )
+  ) %>% 
+    group_by(id) %>% 
+    summarise(ff = mean(ps)) %>% 
+    ungroup() %>% 
+    .[["ff"]],
+  `BBPMM-CBPS` = map_dfr(
+    .x = bb_res$design_stage, 
+    ~ tibble(
+      id = 1:length(.x$ps$cbps[["ps"]]), ps = .x$ps$cbps[["ps"]]
+    )
+  ) %>% 
+    group_by(id) %>% 
+    summarise(ff = mean(ps)) %>% 
+    ungroup() %>% 
+    .[["ff"]],
+  `BBPMM-GBM` = map_dfr(
+    .x = bb_res$design_stage, 
+    ~ tibble(
+      id = 1:length(.x$ps$gbm[["ps"]]), ps = .x$ps$gbm[["ps"]]
+    )
+  ) %>% 
+    group_by(id) %>% 
+    summarise(ff = mean(ps)) %>% 
+    ungroup() %>% 
+    .[["ff"]]
+)
+
+# aregImp ---------------------------------------------------------------
+ps_aregimp <- tibble(
+  `AREGIMP-LR` = map_dfr(
+    .x = aregimp_res$design_stage, 
+    ~ tibble(
+      id = 1:length(.x$ps$logit[["ps"]]), ps = .x$ps$logit[["ps"]]
+    )
+  ) %>% 
+    group_by(id) %>% 
+    summarise(ff = mean(ps)) %>% 
+    ungroup() %>% 
+    .[["ff"]],
+  `AREGIMP-CBPS` = map_dfr(
+    .x = aregimp_res$design_stage, 
+    ~ tibble(
+      id = 1:length(.x$ps$cbps[["ps"]]), ps = .x$ps$cbps[["ps"]]
+    )
+  ) %>% 
+    group_by(id) %>% 
+    summarise(ff = mean(ps)) %>% 
+    ungroup() %>% 
+    .[["ff"]],
+  `AREGIMP-GBM` = map_dfr(
+    .x = aregimp_res$design_stage, 
+    ~ tibble(
+      id = 1:length(.x$ps$gbm[["ps"]]), ps = .x$ps$gbm[["ps"]]
+    )
+  ) %>% 
+    group_by(id) %>% 
+    summarise(ff = mean(ps)) %>% 
+    ungroup() %>% 
+    .[["ff"]]
+)
+
+# NO-MI ----------------------------------------------------------------
+ps_no_mi <- tibble(
+  `MIND-LR` = mind_res$ps$logit[["ps"]],
+  `MIND-CBPS` = mind_res$ps$cbps[["ps"]],
+  `MIND-GBM` = mind_res$ps$gbm[["ps"]],
+  `SAEM` = saem_res$ps[["ps"]],
+  `GBM (surr.)` = gbm_res$ps[["ps"]]
+)
+
+# PS corr --------------------------------------------------------------
+ps_df <- bind_cols(ps_no_mi, ps_mice, ps_bb, ps_aregimp)
+
+corr_ps <- cor(ps_df)
+corrplot(corr_ps, order = "hclust")
+```
+
+<br>
+
+<br>
+
+```{r}
+# ICC estimated PS -----------------------------------------------------
+icc_ps <- irr::icc(
+  ps_df, 
+  model = "oneway",
+  type = "agreement"
+)
+
+icc_tab <- tibble(
+  est = icc_ps$value,
+  lower = icc_ps$lbound,
+  upper = icc_ps$ubound
+)
+
+kbl(
+  icc_tab,
+  caption = "Table 4. ICC of the estimated PS."
+) %>% 
+  kable_classic()
+```

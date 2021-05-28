@@ -1,0 +1,88 @@
+---
+output: github_document
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  out.width = "100%"
+)
+```
+
+# Propensity Score and Missing data
+This repository contains the R scripts to reproduce the analysis workflow
+of the study "__Propensity Score Analysis with partially observed baseline covariates: a practical comparison of methods for handling missing data__"
+on a simulated dataset.
+
+Before running the scripts, please install the following R packages:
+
+``` r
+install.packages(
+  c("tidyverse", "BaBooN", "mice", "miceadds", "optmatch",
+    "MatchIt", "WeightIt", "rms", "misaem", "twang", "CBPS", "cobalt",
+    "assertive", "usethis", "here", "naniar", "tictoc", "MASS",
+    "rpart", "rpart.plot", "knitr", "rmarkdown", "kableExtra",
+    "gtsummary", "corrplot", "readr"), 
+    dependencies = TRUE
+)
+```
+
+The project contains the following folders:
+
+- _data_, containing the R script _simultate_synthetic_dataset.R__ that
+  can be used to simulate the synthetic dataset for the analysis.
+
+- _analysis.R_, containing the R scripts _misc_functions.R_ and
+  _main_analysis_. The former contains the functions that are used to
+  run the analysis, the latter can be used to perform the main analysis
+      
+- _results.R_, containing the R markdown file _main_results.Rmd_. that
+  can be used to visualize the results of the main analysis.
+
+The analysis workflow can be reproduced as follows:
+
+1. Run the script _data/simultate_synthetic_dataset.R_, which simulates
+   the dataset and saves it in __data/synthetic_data.rds__.
+   
+2. Run the script _analysis/main_analysis.R_, which runs the main analysis
+   and save the results.
+
+3. Knitr the _results/main_results.Rmd_ file to produce a report of the
+   results with tables and plots.
+   
+The workflow of the analysis is guaranteed to be reproducible with 
+R version _4.1.0_ and the following packages versions:
+
+```{r}
+library(tidyverse)
+library(BaBooN)
+library(mice)
+library(miceadds)
+library(optmatch)
+library(MatchIt)
+library(WeightIt)
+library(rms)
+library(misaem)
+library(twang)
+library(CBPS)
+library(rmarkdown)
+library(knitr)
+library(kableExtra)
+library(gtsummary)
+library(cobalt)
+library(assertive)
+library(usethis)
+library(here)
+library(naniar)
+library(tictoc)
+library(MASS)
+library(rpart)
+library(rpart.plot)
+library(corrplot)
+library(readr)
+
+si <- sessionInfo()
+print(si, locale = FALSE)
+```
